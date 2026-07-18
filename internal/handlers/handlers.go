@@ -13,6 +13,8 @@ import (
 	"time"
 
 	httpx "llmeval/internal/clients"
+	"llmeval/internal/shadow"
+	"llmeval/internal/worker"
 )
 
 // Config bundles everything a Handler needs. It is passed to New so callers
@@ -33,6 +35,12 @@ type Config struct {
 	// Shadow is the client used for mirrored/comparison traffic whose result
 	// does not affect the caller-facing response.
 	Shadow *http.Client
+	// Pool runs shadow comparisons off the request path. When nil (together
+	// with Comparator), shadowing is disabled.
+	Pool *worker.Pool
+	// Comparator builds shadow-comparison jobs. When nil, shadowing is
+	// disabled.
+	Comparator *shadow.Comparator
 }
 
 // Handler holds dependencies shared across HTTP handlers.
@@ -46,6 +54,9 @@ type Handler struct {
 
 	primary *http.Client
 	shadow  *http.Client
+
+	pool       *worker.Pool
+	comparator *shadow.Comparator
 }
 
 // New constructs a Handler from cfg. If cfg.Logger is nil the slog default is
@@ -64,6 +75,8 @@ func New(cfg Config) *Handler {
 		inferenceEndpoint: cfg.InferenceEndpoint,
 		primary:           cfg.Primary,
 		shadow:            cfg.Shadow,
+		pool:              cfg.Pool,
+		comparator:        cfg.Comparator,
 	}
 }
 
@@ -139,14 +152,49 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	// Draining the response body is important to prevent resource leaks.
 	defer httpx.Drain(resp)
 
+	// Buffer the upstream body so we can both return it to the caller and hand
+	// a copy to the off-path shadow comparison.
+	payload, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.logger.Error("read inference response", slog.Any("error", err))
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream request failed"})
+		return
+	}
+
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "application/json"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		h.logger.Error("stream inference response", slog.Any("error", err))
+	if _, err := w.Write(payload); err != nil {
+		h.logger.Error("write inference response", slog.Any("error", err))
+	}
+
+	// Fire-and-forget: compare the primary response against a shadow model.
+	h.submitShadow(r, body, payload, resp.StatusCode)
+}
+
+// submitShadow enqueues a shadow comparison on the background pool. It is a
+// no-op when shadowing is not configured or the primary response was not a
+// success (there is nothing meaningful to compare). A full queue sheds the
+// comparison rather than blocking the request path.
+func (h *Handler) submitShadow(r *http.Request, reqBody, primaryPayload []byte, status int) {
+	if h.pool == nil || h.comparator == nil {
+		return
+	}
+	if status < 200 || status >= 300 {
+		return
+	}
+
+	job := h.comparator.Job(shadow.Input{
+		Body:           reqBody,
+		Header:         r.Header.Clone(),
+		PrimaryPayload: primaryPayload,
+	})
+	if !h.pool.Submit(job) {
+		h.comparator.RecordDropped(r.Context())
+		h.logger.Warn("shadow queue full; dropping comparison")
 	}
 }
 

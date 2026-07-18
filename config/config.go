@@ -36,6 +36,23 @@ type Config struct {
 	// proxies requests to.
 	InferenceEndpoint string `mapstructure:"INFERENCE_ENDPOINT"`
 
+	// ShadowModel is the model name substituted into the request body for the
+	// off-path shadow comparison. Empty disables model rewriting (the shadow
+	// call reuses the caller's model).
+	ShadowModel string `mapstructure:"SHADOW_MODEL"`
+	// ShadowEndpoint is the chat-completions URL used for the shadow call. When
+	// empty it defaults to InferenceEndpoint.
+	ShadowEndpoint string `mapstructure:"SHADOW_ENDPOINT"`
+
+	// WorkerCount is the number of background worker goroutines running shadow
+	// comparisons. WorkerQueueSize is the buffered queue depth; submissions are
+	// dropped (load shed) when the queue is full. WorkerShutdownTimeout bounds
+	// how long graceful shutdown waits for in-flight/queued jobs to drain
+	// before abandoning them.
+	WorkerCount           int           `mapstructure:"WORKER_COUNT"`
+	WorkerQueueSize       int           `mapstructure:"WORKER_QUEUE_SIZE"`
+	WorkerShutdownTimeout time.Duration `mapstructure:"WORKER_SHUTDOWN_TIMEOUT"`
+
 	// Primary* tune the primary outbound HTTP client (request timeout and
 	// connection-pool settings).
 	PrimaryTimeout             time.Duration `mapstructure:"PRIMARY_TIMEOUT"`
@@ -70,6 +87,14 @@ func Load() (Config, error) {
 	// Secret with no default; must be provided via env or .env file.
 	v.SetDefault("MODEL_ACCESS_KEY", "")
 	v.SetDefault("INFERENCE_ENDPOINT", "https://inference.do-ai.run/v1/chat/completions")
+
+	// Shadow comparison: model rewrite + optional distinct endpoint, plus the
+	// background worker pool that runs comparisons off the request path.
+	v.SetDefault("SHADOW_MODEL", "alibaba-qwen3-32b")
+	v.SetDefault("SHADOW_ENDPOINT", "https://inference.do-ai.run/v1/chat/completions")
+	v.SetDefault("WORKER_COUNT", 4)
+	v.SetDefault("WORKER_QUEUE_SIZE", 64)
+	v.SetDefault("WORKER_SHUTDOWN_TIMEOUT", "5s")
 
 	// Outbound HTTP client defaults (mirror httpx package defaults). Durations
 	// accept Go duration strings (e.g. "10s", "90s").
