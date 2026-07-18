@@ -102,7 +102,7 @@ func run() error {
 
 	// Serve the Prometheus scrape endpoint outside the traced/logged router so
 	// collector scrapes don't generate spans or request-log noise.
-	var handler http.Handler = router
+	handler := router
 	if metricsHandler != nil {
 		root := http.NewServeMux()
 		root.Handle("GET /metrics", metricsHandler)

@@ -59,7 +59,7 @@ func counterValue(t *testing.T, r *sdkmetric.ManualReader, name string, want ...
 func attrsMatch(set attribute.Set, want []attribute.KeyValue) bool {
 	for _, kv := range want {
 		v, ok := set.Value(kv.Key)
-		if !ok || v.Emit() != kv.Value.Emit() {
+		if !ok || v.String() != kv.Value.String() {
 			return false
 		}
 	}
