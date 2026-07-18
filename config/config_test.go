@@ -7,6 +7,7 @@ import (
 
 var configKeys = []string{
 	"APP_ENV", "HOST", "PORT", "LOG_LEVEL", "SERVICE_NAME", "SERVICE_VERSION",
+	"MODEL_ACCESS_KEY",
 }
 
 // clearConfigEnv unsets all config env vars for the duration of the test,
