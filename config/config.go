@@ -98,18 +98,18 @@ func Load() (Config, error) {
 
 	// Outbound HTTP client defaults (mirror httpx package defaults). Durations
 	// accept Go duration strings (e.g. "10s", "90s").
-	v.SetDefault("PRIMARY_TIMEOUT", "30s")
+	v.SetDefault("PRIMARY_TIMEOUT", "10s")
 	v.SetDefault("PRIMARY_MAX_IDLE_CONNS", 100)
 	v.SetDefault("PRIMARY_MAX_IDLE_CONNS_PER_HOST", 10)
 	v.SetDefault("PRIMARY_IDLE_CONN_TIMEOUT", "90s")
-	v.SetDefault("SHADOW_TIMEOUT", "30s")
+	v.SetDefault("SHADOW_TIMEOUT", "10s")
 	v.SetDefault("SHADOW_MAX_IDLE_CONNS", 100)
 	v.SetDefault("SHADOW_MAX_IDLE_CONNS_PER_HOST", 10)
 	v.SetDefault("SHADOW_IDLE_CONN_TIMEOUT", "90s")
 
 	// HTTP server timeouts. Durations accept Go duration strings (e.g. "30s").
-	v.SetDefault("SERVER_READ_TIMEOUT", "30s")
-	v.SetDefault("SERVER_WRITE_TIMEOUT", "30s")
+	v.SetDefault("SERVER_READ_TIMEOUT", "10s")
+	v.SetDefault("SERVER_WRITE_TIMEOUT", "10s")
 	v.SetDefault("SERVER_IDLE_TIMEOUT", "60s")
 
 	// Read from a .env file if present. Missing file is not an error.
