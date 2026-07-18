@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"llmeval/config"
+	httpx "llmeval/internal/clients"
 	"llmeval/internal/handlers"
 	"llmeval/internal/logger"
 	"llmeval/internal/telemetry"
@@ -48,7 +49,31 @@ func run() error {
 		return err
 	}
 
-	h := handlers.New(log, cfg.AppEnv, cfg.ServiceName, cfg.ServiceVersion)
+	// Build the two outbound HTTP clients with their respective tuning, then
+	// inject them into the handler.
+	primary := httpx.NewClient(httpx.Config{
+		Timeout:             cfg.PrimaryTimeout,
+		MaxIdleConns:        cfg.PrimaryMaxIdleConns,
+		MaxIdleConnsPerHost: cfg.PrimaryMaxIdleConnsPerHost,
+		IdleConnTimeout:     cfg.PrimaryIdleConnTimeout,
+	})
+	shadow := httpx.NewClient(httpx.Config{
+		Timeout:             cfg.ShadowTimeout,
+		MaxIdleConns:        cfg.ShadowMaxIdleConns,
+		MaxIdleConnsPerHost: cfg.ShadowMaxIdleConnsPerHost,
+		IdleConnTimeout:     cfg.ShadowIdleConnTimeout,
+	})
+
+	h := handlers.New(handlers.Config{
+		Logger:            log,
+		Env:               cfg.AppEnv,
+		Service:           cfg.ServiceName,
+		Version:           cfg.ServiceVersion,
+		InferenceEndpoint: cfg.InferenceEndpoint,
+		ModelAccessKey:    cfg.ModelAccessKey,
+		Primary:           primary,
+		Shadow:            shadow,
+	})
 
 	// Wrap the router so every request gets a server span plus the standard
 	// HTTP server metrics, alongside the request-logging middleware.

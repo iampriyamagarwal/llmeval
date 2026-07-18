@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -31,6 +32,22 @@ type Config struct {
 	// model provider. It has no default and must be supplied via the
 	// environment (or .env file); it should never be committed to source.
 	ModelAccessKey string `mapstructure:"MODEL_ACCESS_KEY"`
+	// InferenceEndpoint is the upstream chat-completions URL that /v1/chat
+	// proxies requests to.
+	InferenceEndpoint string `mapstructure:"INFERENCE_ENDPOINT"`
+
+	// Primary* tune the primary outbound HTTP client (request timeout and
+	// connection-pool settings).
+	PrimaryTimeout             time.Duration `mapstructure:"PRIMARY_TIMEOUT"`
+	PrimaryMaxIdleConns        int           `mapstructure:"PRIMARY_MAX_IDLE_CONNS"`
+	PrimaryMaxIdleConnsPerHost int           `mapstructure:"PRIMARY_MAX_IDLE_CONNS_PER_HOST"`
+	PrimaryIdleConnTimeout     time.Duration `mapstructure:"PRIMARY_IDLE_CONN_TIMEOUT"`
+
+	// Shadow* tune the shadow outbound HTTP client used for mirrored traffic.
+	ShadowTimeout             time.Duration `mapstructure:"SHADOW_TIMEOUT"`
+	ShadowMaxIdleConns        int           `mapstructure:"SHADOW_MAX_IDLE_CONNS"`
+	ShadowMaxIdleConnsPerHost int           `mapstructure:"SHADOW_MAX_IDLE_CONNS_PER_HOST"`
+	ShadowIdleConnTimeout     time.Duration `mapstructure:"SHADOW_IDLE_CONN_TIMEOUT"`
 }
 
 // Load reads configuration from environment variables and an optional .env
@@ -47,6 +64,18 @@ func Load() (Config, error) {
 	v.SetDefault("SERVICE_VERSION", "dev")
 	// Secret with no default; must be provided via env or .env file.
 	v.SetDefault("MODEL_ACCESS_KEY", "")
+	v.SetDefault("INFERENCE_ENDPOINT", "https://inference.do-ai.run/v1/chat/completions")
+
+	// Outbound HTTP client defaults (mirror httpx package defaults). Durations
+	// accept Go duration strings (e.g. "10s", "90s").
+	v.SetDefault("PRIMARY_TIMEOUT", "10s")
+	v.SetDefault("PRIMARY_MAX_IDLE_CONNS", 100)
+	v.SetDefault("PRIMARY_MAX_IDLE_CONNS_PER_HOST", 10)
+	v.SetDefault("PRIMARY_IDLE_CONN_TIMEOUT", "90s")
+	v.SetDefault("SHADOW_TIMEOUT", "10s")
+	v.SetDefault("SHADOW_MAX_IDLE_CONNS", 100)
+	v.SetDefault("SHADOW_MAX_IDLE_CONNS_PER_HOST", 10)
+	v.SetDefault("SHADOW_IDLE_CONN_TIMEOUT", "90s")
 
 	// Read from a .env file if present. Missing file is not an error.
 	v.SetConfigName(".env")
