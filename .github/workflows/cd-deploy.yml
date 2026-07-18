@@ -1,0 +1,84 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (e.g. v1.2.3). Must already be retagged into DOCR."
+        required: false
+        type: string
+      sha:
+        description: "Optional: full commit SHA to deploy directly (escape hatch). Takes precedence over tag."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize production deploys; never cancel an in-flight deploy (queue instead).
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to App Platform
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve target ref & image tag
+        id: target
+        env:
+          IN_TAG: ${{ github.event.inputs.tag }}
+          IN_SHA: ${{ github.event.inputs.sha }}
+        run: |
+          # A raw SHA (escape hatch) wins over the release tag when both are set.
+          if [ -n "$IN_SHA" ]; then
+            REF="$IN_SHA"
+            IMAGE_TAG="$IN_SHA"
+          elif [ -n "$IN_TAG" ]; then
+            REF="$IN_TAG"
+            IMAGE_TAG="$IN_TAG"
+          else
+            echo "::error::Provide either 'tag' or 'sha'."
+            exit 1
+          fi
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Deploying image tag: $IMAGE_TAG (checkout ref: $REF)"
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Check out the release tag / commit so the app spec matches the image.
+          ref: ${{ steps.target.outputs.ref }}
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Verify image exists in DOCR
+        env:
+          IMAGE_TAG: ${{ steps.target.outputs.image_tag }}
+        run: |
+          if ! doctl registry repository list-tags llmeval --format Tag --no-header \
+              | grep -qw "${IMAGE_TAG}"; then
+            echo "::error::No image llmeval:${IMAGE_TAG} found in DOCR."
+            echo "For a release tag: push the tag first so 'Retag Release' creates it."
+            echo "For a SHA: the commit must have been built (merge to main runs cd-build.yml)."
+            exit 1
+          fi
+
+      - name: Deploy to App Platform
+        uses: digitalocean/app_action/deploy@v2
+        env:
+          # The action substitutes env vars into the in-repo app spec, so
+          # ${IMAGE_TAG} in .do/app.yaml is replaced with the resolved tag/SHA.
+          IMAGE_TAG: ${{ steps.target.outputs.image_tag }}
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          # App is matched/created by the `name` in the spec (llmeval-app), so no
+          # DO_APP_ID is needed. Defaults to .do/app.yaml.
+          app_spec_location: .do/app.yaml
+          print_build_logs: "true"
+          print_deploy_logs: "true"

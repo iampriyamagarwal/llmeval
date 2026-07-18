@@ -1,0 +1,45 @@
+name: llmeval-app
+region: blr
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+
+features:
+  - buildpack-stack=ubuntu-22
+
+ingress:
+  rules:
+    - component:
+        name: llmeval
+      match:
+        authority:
+          exact: ""
+        path:
+          prefix: /
+
+services:
+  - name: llmeval
+    image:
+      registry_type: DOCR
+      registry: llmeval
+      repository: llmeval
+      tag: ${IMAGE_TAG}
+
+    http_port: 9090
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+
+    health_check:
+      http_path: /health
+
+    envs:
+      - key: APP_ENV
+        scope: RUN_TIME
+        value: production
+      - key: HOST
+        scope: RUN_TIME
+        value: "0.0.0.0"
+      - key: LOG_LEVEL
+        scope: RUN_TIME
+        value: info

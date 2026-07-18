@@ -1,0 +1,36 @@
+name: Build & Push
+
+# On every merge to main, build the container image and push it to DOCR tagged
+# with the commit SHA. This does NOT deploy. A release is cut by pushing a git
+# tag: "Retag Release" (cd-retag.yml) then adds the tag name to this same image
+# in DOCR. Deploys are run manually via "Deploy" (cd-deploy.yml).
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    name: Build image & push to DOCR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DOCR
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build & push image (tagged with commit SHA)
+        run: |
+          IMAGE="registry.digitalocean.com/${{ vars.DOCR_REGISTRY }}/llmeval"
+          docker build -t "$IMAGE:${GITHUB_SHA}" .
+          docker push "$IMAGE:${GITHUB_SHA}"
+          echo "Pushed $IMAGE:${GITHUB_SHA}"
