@@ -13,6 +13,7 @@ var configKeys = []string{
 	"PRIMARY_IDLE_CONN_TIMEOUT",
 	"SHADOW_TIMEOUT", "SHADOW_MAX_IDLE_CONNS", "SHADOW_MAX_IDLE_CONNS_PER_HOST",
 	"SHADOW_IDLE_CONN_TIMEOUT",
+	"SERVER_READ_TIMEOUT", "SERVER_WRITE_TIMEOUT", "SERVER_IDLE_TIMEOUT",
 }
 
 // clearConfigEnv unsets all config env vars for the duration of the test,
@@ -91,6 +92,17 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.ShadowIdleConnTimeout != 90*time.Second {
 		t.Errorf("ShadowIdleConnTimeout = %v, want 90s", cfg.ShadowIdleConnTimeout)
 	}
+
+	// HTTP server timeout defaults.
+	if cfg.ServerReadTimeout != 10*time.Second {
+		t.Errorf("ServerReadTimeout = %v, want 10s", cfg.ServerReadTimeout)
+	}
+	if cfg.ServerWriteTimeout != 10*time.Second {
+		t.Errorf("ServerWriteTimeout = %v, want 10s", cfg.ServerWriteTimeout)
+	}
+	if cfg.ServerIdleTimeout != 60*time.Second {
+		t.Errorf("ServerIdleTimeout = %v, want 60s", cfg.ServerIdleTimeout)
+	}
 }
 
 func TestLoadClientEnvOverrides(t *testing.T) {
@@ -133,6 +145,29 @@ func TestLoadClientEnvOverrides(t *testing.T) {
 	}
 	if cfg.ShadowIdleConnTimeout != 15*time.Second {
 		t.Errorf("ShadowIdleConnTimeout = %v, want 15s", cfg.ShadowIdleConnTimeout)
+	}
+}
+
+func TestLoadServerTimeoutEnvOverrides(t *testing.T) {
+	clearConfigEnv(t)
+
+	t.Setenv("SERVER_READ_TIMEOUT", "15s")
+	t.Setenv("SERVER_WRITE_TIMEOUT", "20s")
+	t.Setenv("SERVER_IDLE_TIMEOUT", "120s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.ServerReadTimeout != 15*time.Second {
+		t.Errorf("ServerReadTimeout = %v, want 15s", cfg.ServerReadTimeout)
+	}
+	if cfg.ServerWriteTimeout != 20*time.Second {
+		t.Errorf("ServerWriteTimeout = %v, want 20s", cfg.ServerWriteTimeout)
+	}
+	if cfg.ServerIdleTimeout != 120*time.Second {
+		t.Errorf("ServerIdleTimeout = %v, want 120s", cfg.ServerIdleTimeout)
 	}
 }
 

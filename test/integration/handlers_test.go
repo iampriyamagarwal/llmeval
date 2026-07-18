@@ -49,7 +49,6 @@ func newServerWithUpstream(t *testing.T, inferenceEndpoint string) string {
 		Service:           testService,
 		Version:           testVersion,
 		InferenceEndpoint: inferenceEndpoint,
-		ModelAccessKey:    "integration-key",
 		Primary:           httpx.NewClient(httpx.Config{}),
 		Shadow:            httpx.NewClient(httpx.Config{}),
 	})
@@ -138,10 +137,11 @@ func TestRootEndpoint(t *testing.T) {
 }
 
 func TestChatEndpoint(t *testing.T) {
-	// Fake upstream inference endpoint the proxy forwards to.
+	// Fake upstream inference endpoint the proxy forwards to. The proxy must
+	// forward the caller's exact headers (here, the Content-Type set by do).
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer integration-key" {
-			t.Errorf("upstream Authorization = %q, want %q", got, "Bearer integration-key")
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Errorf("upstream Content-Type = %q, want %q", got, "application/json")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

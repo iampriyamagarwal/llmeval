@@ -30,7 +30,6 @@ func newTestServerWithUpstream(t *testing.T, inferenceEndpoint string) *httptest
 		Service:           "llmeval",
 		Version:           "test-version",
 		InferenceEndpoint: inferenceEndpoint,
-		ModelAccessKey:    "test-key",
 		Primary:           httpx.NewClient(httpx.Config{}),
 		Shadow:            httpx.NewClient(httpx.Config{}),
 	})
@@ -94,10 +93,11 @@ func TestHealthRoute(t *testing.T) {
 
 func TestChatRoute(t *testing.T) {
 	// Fake upstream inference endpoint that records what the proxy forwarded.
-	var gotAuth, gotBody, gotContentType string
+	var gotAuth, gotBody, gotContentType, gotCustom string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotContentType = r.Header.Get("Content-Type")
+		gotCustom = r.Header.Get("X-Custom-Header")
 		b, _ := io.ReadAll(r.Body)
 		gotBody = string(b)
 		w.Header().Set("Content-Type", "application/json")
@@ -119,6 +119,8 @@ func TestChatRoute(t *testing.T) {
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer caller-token")
+	req.Header.Set("X-Custom-Header", "custom-value")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -140,10 +142,13 @@ func TestChatRoute(t *testing.T) {
 		t.Errorf("id = %v, want chatcmpl-abc", body["id"])
 	}
 
-	// The proxy forwarded the request body, JSON content type, and the
-	// configured model access key as a bearer token.
-	if gotAuth != "Bearer test-key" {
-		t.Errorf("upstream Authorization = %q, want %q", gotAuth, "Bearer test-key")
+	// The proxy forwarded the caller's exact headers (Authorization, custom
+	// headers, content type) and body verbatim to the upstream.
+	if gotAuth != "Bearer caller-token" {
+		t.Errorf("upstream Authorization = %q, want %q", gotAuth, "Bearer caller-token")
+	}
+	if gotCustom != "custom-value" {
+		t.Errorf("upstream X-Custom-Header = %q, want %q", gotCustom, "custom-value")
 	}
 	if gotContentType != "application/json" {
 		t.Errorf("upstream Content-Type = %q, want application/json", gotContentType)
