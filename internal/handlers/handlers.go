@@ -44,7 +44,7 @@ func (h *Handler) root(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message": "Welcome to " + h.service,
 		"service": h.service,
-		"version": h.version,
+		"version": "v1.0.1",
 	})
 }
 

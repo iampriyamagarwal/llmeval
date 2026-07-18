@@ -43,3 +43,7 @@ services:
       - key: LOG_LEVEL
         scope: RUN_TIME
         value: info
+      - key: MODEL_ACCESS_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: EV[1:b32XiABkcGPdnnz7OIZmuIZrylj3UXzr:gB8AGz06z98ahebwM5zBlOTLnT46VwOTTZ/gbr2rJWXo8Jmje+yH4p6Xzp/Jqdi2ftUlJUSrcmEMsmm4tO4+dInbWLLG2j5fK0GqYUR3Q0hW8hfr4/5+]

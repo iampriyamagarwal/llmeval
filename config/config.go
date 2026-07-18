@@ -27,6 +27,10 @@ type Config struct {
 	// ServiceVersion is the service version reported in telemetry as the
 	// OpenTelemetry `service.version` resource attribute.
 	ServiceVersion string `mapstructure:"SERVICE_VERSION"`
+	// ModelAccessKey is the secret credential used to authenticate with the
+	// model provider. It has no default and must be supplied via the
+	// environment (or .env file); it should never be committed to source.
+	ModelAccessKey string `mapstructure:"MODEL_ACCESS_KEY"`
 }
 
 // Load reads configuration from environment variables and an optional .env
@@ -41,6 +45,8 @@ func Load() (Config, error) {
 	v.SetDefault("LOG_LEVEL", "info")
 	v.SetDefault("SERVICE_NAME", "llmeval")
 	v.SetDefault("SERVICE_VERSION", "dev")
+	// Secret with no default; must be provided via env or .env file.
+	v.SetDefault("MODEL_ACCESS_KEY", "")
 
 	// Read from a .env file if present. Missing file is not an error.
 	v.SetConfigName(".env")
