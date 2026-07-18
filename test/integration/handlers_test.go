@@ -9,17 +9,22 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	httpx "llmeval/internal/clients"
 	"llmeval/internal/handlers"
+	"llmeval/internal/shadow"
+	"llmeval/internal/worker"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -30,28 +35,76 @@ const (
 	testVersion = "test-version"
 )
 
+// serverConfig configures the test server wiring so each test can mirror
+// cmd/server/main.go as closely as the scenario needs. The zero value wires a
+// server with no upstream and shadowing disabled (Pool/Comparator nil).
+type serverConfig struct {
+	// inferenceEndpoint is the upstream the /v1/chat proxy forwards to.
+	inferenceEndpoint string
+	// shadowEndpoint, when non-empty, enables the off-request-path shadow
+	// comparison exactly like main.go: a background worker.Pool plus a
+	// shadow.Comparator pointed at this endpoint.
+	shadowEndpoint string
+	// shadowModel is substituted into the request body's "model" field for the
+	// shadow call. Only meaningful when shadowEndpoint is set.
+	shadowModel string
+}
+
 // newServer starts an httptest.Server wired exactly like cmd/server/main.go:
 // the real router built by handlers.New wrapped with the otelhttp handler. It
 // returns the base URL and registers cleanup to close the server.
 func newServer(t *testing.T) string {
-	return newServerWithUpstream(t, "")
+	return newServerWith(t, serverConfig{})
 }
 
 // newServerWithUpstream is like newServer but points the chat proxy at the
 // given inference endpoint URL.
 func newServerWithUpstream(t *testing.T, inferenceEndpoint string) string {
+	return newServerWith(t, serverConfig{inferenceEndpoint: inferenceEndpoint})
+}
+
+// newServerWith starts an httptest.Server wired like cmd/server/main.go from
+// sc. When sc.shadowEndpoint is set it also stands up the background worker
+// pool and shadow comparator (draining the pool on cleanup) so the full
+// primary + shadow request flow is exercised end-to-end.
+func newServerWith(t *testing.T, sc serverConfig) string {
 	t.Helper()
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := handlers.New(handlers.Config{
+	cfg := handlers.Config{
 		Logger:            log,
 		Env:               testEnv,
 		Service:           testService,
 		Version:           testVersion,
-		InferenceEndpoint: inferenceEndpoint,
+		InferenceEndpoint: sc.inferenceEndpoint,
 		Primary:           httpx.NewClient(httpx.Config{}),
 		Shadow:            httpx.NewClient(httpx.Config{}),
-	})
+	}
+
+	if sc.shadowEndpoint != "" {
+		pool := worker.New(log, 2, 8)
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := pool.Shutdown(ctx); err != nil {
+				t.Errorf("worker pool shutdown: %v", err)
+			}
+		})
+
+		comparator, err := shadow.New(shadow.Config{
+			Logger:   log,
+			Client:   httpx.NewClient(httpx.Config{}),
+			Endpoint: sc.shadowEndpoint,
+			Model:    sc.shadowModel,
+		})
+		if err != nil {
+			t.Fatalf("shadow.New: %v", err)
+		}
+		cfg.Pool = pool
+		cfg.Comparator = comparator
+	}
+
+	h := handlers.New(cfg)
 	handler := otelhttp.NewHandler(h.Routes(), "http.server")
 
 	srv := httptest.NewServer(handler)
@@ -60,13 +113,24 @@ func newServerWithUpstream(t *testing.T, inferenceEndpoint string) string {
 	return srv.URL
 }
 
-// do performs a real HTTP request against the test server and returns the
-// status code together with the raw (undecoded) body.
+// do performs a real HTTP request (with an empty body) against the test server
+// and returns the status code together with the raw (undecoded) body.
 func do(t *testing.T, method, url string) (int, []byte) {
+	t.Helper()
+	return doBody(t, method, url, "")
+}
+
+// doBody is like do but sends reqBody as the request body. An empty reqBody
+// sends no body.
+func doBody(t *testing.T, method, url, reqBody string) (int, []byte) {
 	t.Helper()
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	req, err := http.NewRequest(method, url, nil)
+	var reqReader io.Reader
+	if reqBody != "" {
+		reqReader = strings.NewReader(reqBody)
+	}
+	req, err := http.NewRequest(method, url, reqReader)
 	if err != nil {
 		t.Fatalf("new request %s %s: %v", method, url, err)
 	}
@@ -162,6 +226,105 @@ func TestChatEndpoint(t *testing.T) {
 	}
 	if body["object"] != "chat.completion" {
 		t.Errorf("object field = %q, want %q", body["object"], "chat.completion")
+	}
+}
+
+// TestChatShadowComparison exercises the full primary + shadow flow wired like
+// cmd/server/main.go: the caller is served the primary response while the
+// shadow comparison runs off the request path against a separate endpoint. It
+// asserts the shadow endpoint is called with the request body's model rewritten
+// to the configured shadow model, and that the caller-facing response is the
+// primary one (unaffected by the shadow call).
+func TestChatShadowComparison(t *testing.T) {
+	primaryUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-primary","action":"approve"}`))
+	}))
+	defer primaryUpstream.Close()
+
+	// The shadow upstream runs asynchronously; publish the body it receives so
+	// the test can synchronise on the off-path call having happened.
+	gotShadowBody := make(chan []byte, 1)
+	shadowUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		select {
+		case gotShadowBody <- b:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-shadow","action":"approve"}`))
+	}))
+	defer shadowUpstream.Close()
+
+	base := newServerWith(t, serverConfig{
+		inferenceEndpoint: primaryUpstream.URL,
+		shadowEndpoint:    shadowUpstream.URL,
+		shadowModel:       "shadow-model-x",
+	})
+
+	status, raw := doBody(t, http.MethodPost, base+"/v1/chat",
+		`{"model":"primary-model","action":"approve"}`)
+	body := decode(t, base+"/v1/chat", raw)
+
+	// The caller must receive the primary response, not the shadow one.
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if body["id"] != "chatcmpl-primary" {
+		t.Errorf("id field = %q, want %q", body["id"], "chatcmpl-primary")
+	}
+
+	// The shadow call happens off the request path, so wait for it.
+	select {
+	case shadowBody := <-gotShadowBody:
+		var obj map[string]any
+		if err := json.Unmarshal(shadowBody, &obj); err != nil {
+			t.Fatalf("shadow request body is not JSON: %v (body=%q)", err, shadowBody)
+		}
+		if obj["model"] != "shadow-model-x" {
+			t.Errorf("shadow request model = %v, want %q", obj["model"], "shadow-model-x")
+		}
+		if obj["action"] != "approve" {
+			t.Errorf("shadow request action = %v, want %q", obj["action"], "approve")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("shadow endpoint was not called within timeout")
+	}
+}
+
+// TestChatShadowDisabled verifies that when shadowing is not wired (Pool and
+// Comparator nil, as in the other tests) a successful chat request does not
+// produce any call to a second endpoint.
+func TestChatShadowDisabled(t *testing.T) {
+	var shadowCalled int32
+	shadowUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&shadowCalled, 1)
+	}))
+	defer shadowUpstream.Close()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-primary","action":"approve"}`))
+	}))
+	defer upstream.Close()
+
+	// shadowEndpoint intentionally left empty: shadowing is disabled.
+	base := newServerWith(t, serverConfig{inferenceEndpoint: upstream.URL})
+
+	status, _ := doBody(t, http.MethodPost, base+"/v1/chat",
+		`{"model":"primary-model","action":"approve"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	// Give any (erroneously scheduled) background work a chance to run before
+	// asserting the shadow endpoint stayed untouched.
+	time.Sleep(200 * time.Millisecond)
+	if n := atomic.LoadInt32(&shadowCalled); n != 0 {
+		t.Errorf("shadow endpoint called %d times, want 0 when shadowing disabled", n)
 	}
 }
 
