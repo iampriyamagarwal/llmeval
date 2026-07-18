@@ -1,0 +1,59 @@
+name: Retag Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retag-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  retag:
+    name: Retag SHA image as ${{ github.ref_name }} in DOCR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Log in to DOCR
+        # Writes docker credentials to ~/.docker/config.json, which crane reads.
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Wait for commit-SHA image to exist in DOCR
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          # The tagged commit is built by cd-build.yml on merge. If the tag is
+          # pushed before that build finishes, wait for the image to appear.
+          attempts=30 # 30 * 20s = up to 10 minutes
+          for i in $(seq 1 "$attempts"); do
+            if doctl registry repository list-tags llmeval --format Tag --no-header \
+                | grep -qw "${TARGET_SHA}"; then
+              echo "Found llmeval:${TARGET_SHA}"
+              exit 0
+            fi
+            echo "Image llmeval:${TARGET_SHA} not in DOCR yet (attempt ${i}/${attempts}); waiting 20s..."
+            sleep 20
+          done
+          echo "::error::Timed out waiting for llmeval:${TARGET_SHA}. Was this commit built (merged to main)?"
+          exit 1
+
+      - name: Retag image (SHA -> ${{ github.ref_name }})
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          IMAGE="registry.digitalocean.com/${{ vars.DOCR_REGISTRY }}/llmeval"
+          # `crane tag` aliases the release tag to the SHA image's exact digest.
+          crane tag "$IMAGE:${TARGET_SHA}" "${RELEASE_TAG}"
+          echo "Tagged $IMAGE:${TARGET_SHA} as $IMAGE:${RELEASE_TAG} (same digest)"
