@@ -70,7 +70,6 @@ func run() error {
 		Service:           cfg.ServiceName,
 		Version:           cfg.ServiceVersion,
 		InferenceEndpoint: cfg.InferenceEndpoint,
-		ModelAccessKey:    cfg.ModelAccessKey,
 		Primary:           primary,
 		Shadow:            shadow,
 	})
@@ -82,9 +81,9 @@ func run() error {
 	srv := &http.Server{
 		Addr:         cfg.Addr(),
 		Handler:      router,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  cfg.ServerReadTimeout,
+		WriteTimeout: cfg.ServerWriteTimeout,
+		IdleTimeout:  cfg.ServerIdleTimeout,
 	}
 
 	serverErr := make(chan error, 1)

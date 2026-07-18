@@ -28,8 +28,6 @@ type Config struct {
 	// InferenceEndpoint is the upstream chat-completions URL that /v1/chat
 	// proxies requests to.
 	InferenceEndpoint string
-	// ModelAccessKey authenticates outbound requests to the inference endpoint.
-	ModelAccessKey string
 	// Primary is the client whose response is served back to the caller.
 	Primary *http.Client
 	// Shadow is the client used for mirrored/comparison traffic whose result
@@ -45,7 +43,6 @@ type Handler struct {
 	version string
 
 	inferenceEndpoint string
-	modelAccessKey    string
 
 	primary *http.Client
 	shadow  *http.Client
@@ -65,7 +62,6 @@ func New(cfg Config) *Handler {
 		service:           cfg.Service,
 		version:           cfg.Version,
 		inferenceEndpoint: cfg.InferenceEndpoint,
-		modelAccessKey:    cfg.ModelAccessKey,
 		primary:           cfg.Primary,
 		shadow:            cfg.Shadow,
 	}
@@ -121,11 +117,8 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return nil, err
 			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "application/json")
-			if h.modelAccessKey != "" {
-				req.Header.Set("Authorization", "Bearer "+h.modelAccessKey)
-			}
+			// Forward the caller's request headers verbatim to the upstream.
+			req.Header = r.Header.Clone()
 			return req, nil
 		})
 	if err != nil {
@@ -143,6 +136,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream request failed"})
 		return
 	}
+	// Draining the response body is important to prevent resource leaks.
 	defer httpx.Drain(resp)
 
 	ct := resp.Header.Get("Content-Type")
